@@ -35,7 +35,6 @@ from qiskit_metal.draw.utility import to_vec3D
 from qiskit_metal.draw.basic import is_rectangle
 from qiskit_metal.renderers.renderer_base import QRendererAnalysis
 from qiskit_metal.toolbox_metal.parsing import is_true
-from qiskit_metal.designs.design_base import QDesign
 
 from qiskit_metal import Dict
 
@@ -1028,6 +1027,7 @@ class QAnsysRenderer(QRendererAnalysis):
 
         self.chip_subtract_dict = defaultdict(set)
         self.assign_perfE = []
+        self.assign_perfE_chip = []
         self.assign_mesh = []
 
         self.render_tables()
@@ -1219,6 +1219,7 @@ class QAnsysRenderer(QRendererAnalysis):
         # Potentially add to list of elements to metallize
         elif not qgeom["helper"]:
             self.assign_perfE.append(name)
+            self.assign_perfE_chip.append(qgeom.chip)
 
     def render_element_path(self, qgeom: pd.Series):
         """Render a path-type element.
@@ -1302,6 +1303,7 @@ class QAnsysRenderer(QRendererAnalysis):
 
         elif qgeom["width"] and (not qgeom["helper"]):
             self.assign_perfE.append(name)
+            self.assign_perfE_chip.append(qgeom.chip)
 
     def add_endcaps(self, open_pins: Union[list, None] = None):
         """Create endcaps (rectangular cutouts) for all pins in the list
@@ -1546,6 +1548,7 @@ class QAnsysRenderer(QRendererAnalysis):
             # Any layer which has subtract=True qgeometries will have a ground plane
             # TODO: Material property assignment may become layer-dependent.
             self.assign_perfE.append(f"ground_{chip_name}_plane")
+            self.assign_perfE_chip.append(chip_name)
 
     def subtract_from_ground(self):
         """For each chip, subtract all "negative" shapes residing on its
@@ -1736,14 +1739,18 @@ class QAnsysRenderer(QRendererAnalysis):
             energy_elec = eprd.calc_energy_electric()
             energy_elec_substrate = eprd.calc_energy_electric(
                 None, self.pinfo.dissipative["dielectrics_bulk"][0])
-            energy_mag = eprd.calc_energy_magnetic()
+            energy_mag_no_ke = eprd.calc_energy_magnetic()
+            energy_mag_ke = eprd.calc_energy_kinetic_inductance_without_junction(
+                None)
+            energy_mag = energy_mag_no_ke + energy_mag_ke
 
             return energy_elec, energy_elec_substrate, energy_mag
         self.logger.error("dielectrics_bulk needs to be defined")
 
     def epr_run_analysis(self,
                          junctions: dict = None,
-                         dissipatives: dict = None):
+                         dissipatives: dict = None,
+                         **kwargs):
         """Executes the EPR analysis
         pinfo must have a valid list of junctions and dissipatives to compute the energy stored
         in the system. So please provide them here, or using epr_start()
@@ -1756,9 +1763,12 @@ class QAnsysRenderer(QRendererAnalysis):
         """
         if junctions is not None or dissipatives is not None:
             self.epr_start(junctions, dissipatives)
-        self.epr_distributed_analysis.do_EPR_analysis()
+        self.epr_distributed_analysis.do_EPR_analysis(**kwargs)
 
-    def epr_spectrum_analysis(self, cos_trunc: int = 8, fock_trunc: int = 7):
+    def epr_spectrum_analysis(self,
+                              cos_trunc: int = 8,
+                              fock_trunc: int = 7,
+                              **kwargs):
         """Core epr analysis method.
 
         Args:
@@ -1768,7 +1778,8 @@ class QAnsysRenderer(QRendererAnalysis):
         self.epr_quantum_analysis = epr.QuantumAnalysis(
             self.epr_distributed_analysis.data_filename)
         self.epr_quantum_analysis.analyze_all_variations(cos_trunc=cos_trunc,
-                                                         fock_trunc=fock_trunc)
+                                                         fock_trunc=fock_trunc,
+                                                         **kwargs)
 
     def epr_report_hamiltonian(self,
                                swp_variable: str = "variation",
